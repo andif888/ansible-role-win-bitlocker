@@ -1,0 +1,72 @@
+---
+# tasks file for ansible-role-win-bitlocker
+- name: check for TPM
+  win_shell: |
+    $has_tpm = $false
+    $TPM = Get-WmiObject win32_tpm -Namespace root\cimv2\security\microsofttpm | where {$_.IsEnabled().Isenabled -eq 'True'} -ErrorAction SilentlyContinue
+    if ($TPM) {
+      $has_tpm = $true
+    }
+    Write-Host $has_tpm
+  register: has_TPM
+  changed_when: False
+
+- name: check for Bitlocker Volume
+  win_shell: |
+    $has_BitlockerVolume = $false
+    $SystemDriveBitLockerRDY = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction SilentlyContinue
+    if ($SystemDriveBitLockerRDY) {
+      $has_BitlockerVolume = $true
+    }
+    Write-Host $has_BitlockerVolume
+  register: has_BitlockerVolume
+  changed_when: False
+
+- name: Create Bitlocker Volume
+  win_shell: |
+    BdeHdCfg.exe -target default -quiet
+  when: 
+    - has_TPM.stdout is match("True*")
+    - has_BitlockerVolume.stdout is match("False*")
+
+- name: Reboot after create Bitlocker Volume
+  win_reboot:
+  when: 
+    - has_TPM.stdout is match("True*")
+    - has_BitlockerVolume.stdout is match("False*")
+
+
+- name: check for Bitlocker Volume again
+  win_shell: |
+    $has_BitlockerVolume = $false
+    $SystemDriveBitLockerRDY = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction SilentlyContinue
+    if ($SystemDriveBitLockerRDY) {
+      $has_BitlockerVolume = $true
+    }
+    Write-Host $has_BitlockerVolume
+  register: has_BitlockerVolume2
+  changed_when: False
+
+
+
+- name: Get Bitlocker status
+  win_shell: |
+    Get-BitlockerVolume -MountPoint $env:SystemDrive | Select ProtectionStatus
+  register: bitlocker_status
+  changed_when: False
+
+- debug:
+    var: bitlocker_status.stdout
+
+- name: Enable Bitlocker
+  win_shell: |
+    Add-BitLockerKeyProtector -MountPoint $env:SystemDrive -TmpProtector
+    sleep -Seconds 15
+    Enable-Bitlocker -MountPoint $env:SystemDrive -EncryptionMethod XtsAes256 -RecoveryPasswordProtector
+    sleep -Seconds 15
+  when: bitlocker_status.stdout.find('Off') != -1
+
+- name: Reboot after enable Bitlocker
+  win_reboot:
+  when: bitlocker_status.stdout.find('Off') != -1
+
